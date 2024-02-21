@@ -1,0 +1,22 @@
+body {
+    font-family: 'Noto Sans JP', sans-serif;
+
+}
+
+a img {
+    width: 10%;
+
+}
+
+.navbar-brand {
+    margin-right: auto;
+}
+
+.navbar-nav {
+    margin-left: auto;
+}
+
+.navbar-nav .nav-item {
+    margin-right: 40px;
+    font-weight: bold;
+}
