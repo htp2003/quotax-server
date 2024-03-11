@@ -4,17 +4,38 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const bodyParser = require('body-parser');
 const authenticateToken = require('../middleware/AuthenticateToken');
-
+const multer = require('multer');
+const path = require('path');
 
 const secretKey = '123';
 const router = express.Router();
 router.use(express.json());
-
-
-
-
 module.exports = router;
-router.get('/api/user/:id', authenticateToken, async (req, res) => {
+
+
+// Thiết lập multer storage
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, 'uploads/'); // Đường dẫn thư mục lưu trữ tệp
+    },
+    filename: function (req, file, cb) {
+        const ext = path.extname(file.originalname);
+        cb(null, `${file.fieldname}-${Date.now()}${ext}`);
+    },
+});
+// Kiểm soát loại tệp được phép tải lên
+const fileFilter = (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+        cb(null, true);
+    } else {
+        cb(new Error('Only image files are allowed!'), false);
+    }
+};
+
+const upload = multer({ storage, fileFilter });
+
+
+router.get('/api/user/:id', async (req, res) => {
     const userId = req.params.id;
 
     try {
@@ -38,7 +59,6 @@ router.get('/api/user/:id', authenticateToken, async (req, res) => {
         res.status(500).json({ message: 'Internal Server Error' });
     }
 });
-
 // Endpoint API for user login
 router.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
@@ -71,7 +91,7 @@ router.post('/api/login', async (req, res) => {
             email: existingUsers[0].email,
             phone: existingUsers[0].phone,
             address: existingUsers[0].address,
-
+            role: existingUsers[0].role,
         };
 
         res.json({ user, token });
@@ -80,31 +100,30 @@ router.post('/api/login', async (req, res) => {
         res.status(500).json({ message: 'Internal system error' });
     }
 });
-
-
+// api/register
 router.post('/api/register', async (req, res) => {
     const { username, fullname, email, password, address, phone } = req.body;
 
     try {
-        // check if the user exists
+        // Check if the user exists
         const [existingUsers, fields] = await pool.execute('SELECT * FROM `users` WHERE username = ?', [username]);
 
         if (existingUsers.length > 0) {
             return res.status(400).json({ message: 'Username already exists' });
         }
 
-        // hash
+        // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // add user
+        // Add user with default role 'Customer'
         const [result, _] = await pool.execute(
-            'INSERT INTO `users` (username, fullname, email, password, address, phone) VALUES (?, ?, ?, ?, ?, ?)',
-            [username, fullname, email, hashedPassword, address, phone]
+            'INSERT INTO `users` (username, fullname, email, password, address, phone, role) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [username, fullname, email, hashedPassword, address, phone, 'Customer']
         );
 
         const userId = result.insertId;
 
-        // Trả về thông tin người dùng đã đăng ký
+        // Return registered user information
         const registeredUser = {
             id: userId,
             username,
@@ -112,6 +131,7 @@ router.post('/api/register', async (req, res) => {
             email,
             address,
             phone,
+            role: 'Customer', // Default role
         };
 
         res.status(201).json({ user: registeredUser, message: 'User registered successfully' });
@@ -120,7 +140,6 @@ router.post('/api/register', async (req, res) => {
         res.status(500).json({ message: 'Internal system error' });
     }
 });
-
 router.post('/api/update-profile', async (req, res) => {
     const userId = req.body.userId; // Sử dụng userId trực tiếp từ request body
 
@@ -149,20 +168,6 @@ router.post('/api/update-profile', async (req, res) => {
         res.status(500).json({ message: 'Internal system error' });
     }
 });
-
-// Endpoint để lấy tất cả bài viết
-router.get('/api/posts', async (req, res) => {
-    try {
-
-        const posts = await db.query('SELECT * FROM post');
-
-        res.json({ posts });
-    } catch (error) {
-        console.error('Error fetching posts:', error);
-        res.status(500).json({ message: 'Internal Server Error' });
-    }
-});
-
 router.post('/api/change-password', authenticateToken, async (req, res) => {
     const userId = req.user.userId; // Lấy userId từ token
     const { currentPassword, newPassword, confirmPassword } = req.body;
@@ -200,9 +205,300 @@ router.post('/api/change-password', authenticateToken, async (req, res) => {
         return res.status(500).json({ message: 'Internal Server Error' });
     }
 });
+router.get('/api/blogs', async (req, res) => {
+    try {
+        // Truy vấn cơ sở dữ liệu để lấy dữ liệu từ bảng blog
+        const [rows, fields] = await pool.execute('SELECT post_id, title, content, image FROM post');
+
+        // Trả về dữ liệu lấy được từ cơ sở dữ liệu
+        res.json({ posts: rows });
+    } catch (error) {
+        console.error('Error querying MySQL:', error);
+        res.status(500).json({ message: 'Internal Server Error' });
+    }
+});
+// Route API để lấy thông tin của một bài viết từ bảng blog theo ID
+router.get('/api/blogs/:id', async (req, res) => {
+    const postId = req.params.id;
+
+    try {
+        // Truy vấn cơ sở dữ liệu để lấy thông tin của bài viết theo ID
+        const [rows, fields] = await pool.execute('SELECT title, content, image FROM post WHERE post_id = ?', [postId]);
+
+        if (rows.length > 0) {
+            const post = {
+                title: rows[0].title,
+                content: rows[0].content,
+                image: rows[0].image
+            };
+            res.json(post);
+        } else {
+            res.status(404).json({ message: 'Blog not found' });
+        }
+    } catch (error) {
+        console.error('Error querying MySQL:', error);
+        res.status(500).json({ message: 'Internal Server Error' });
+    }
+});
+// Endpoint API để lấy danh sách các bài viết khác dựa trên ID của bài viết hiện tại
+router.get('/api/blogs/:id/other-blogs', async (req, res) => {
+    const postId = req.params.id;
+
+    try {
+        // Truy vấn cơ sở dữ liệu để lấy danh sách các bài viết khác dựa trên ID
+        const [rows, fields] = await pool.execute('SELECT post_id, title FROM `post` WHERE post_id != ? LIMIT 8', [postId]);
+
+        // Trả về danh sách các bài viết khác
+        res.json(rows);
+    } catch (error) {
+        console.error('Error querying MySQL:', error);
+        res.status(500).json({ message: 'Internal Server Error' });
+    }
+});
 
 
+router.post('/api/blogs', async (req, res) => {
+    const { title, content, imageUrl } = req.body;
+
+    try {
+        // Thực hiện xử lý với imageUrl (ví dụ: lưu vào CSDL)
+        const [result, _] = await pool.execute(
+            'INSERT INTO `post` (title, content, image) VALUES (?, ?, ?)',
+            [title, content, imageUrl]
+        );
+
+        if (result.affectedRows > 0) {
+            res.status(200).json({ message: 'Blog post added successfully' });
+        } else {
+            res.status(400).json({ message: 'Failed to add blog post' });
+        }
+    } catch (error) {
+        console.error('Error adding blog post:', error);
+        res.status(500).json({ message: 'Internal Server Error' });
+    }
+});
+
+// Endpoint to edit an existing blog post
+router.put('/api/blogs/:postId', async (req, res) => {
+    const postId = req.params.postId;
+    const { title, content, image } = req.body;
+
+    try {
+        // Update blog post in the database
+        const [result, _] = await pool.execute(
+            'UPDATE `post` SET title=?, content=?, image=? WHERE post_id=?',
+            [title, content, image, postId]
+        );
+
+        if (result.affectedRows > 0) {
+            res.status(200).json({ message: 'Blog post updated successfully' });
+        } else {
+            res.status(404).json({ message: 'Blog post not found' });
+        }
+    } catch (error) {
+        console.error('Error updating blog post:', error);
+        res.status(500).json({ message: 'Internal Server Error' });
+    }
+});
+
+// Endpoint to delete an existing blog post
+router.delete('/api/blogs/:postId', async (req, res) => {
+    const postId = req.params.postId;
+
+    try {
+        // Delete blog post from the database
+        const [result, _] = await pool.execute('DELETE FROM `post` WHERE post_id=?', [postId]);
+
+        if (result.affectedRows > 0) {
+            res.status(200).json({ message: 'Blog post deleted successfully' });
+        } else {
+            res.status(404).json({ message: 'Blog post not found' });
+        }
+    } catch (error) {
+        console.error('Error deleting blog post:', error);
+        res.status(500).json({ message: 'Internal Server Error' });
+    }
+});
+
+// POST request để tìm kiếm bài viết theo tiêu đề
+router.post('/search-blogs', async (req, res) => {
+    const searchTerm = req.body.searchTerm;
+
+    try {
+        // Truy vấn cơ sở dữ liệu để tìm kiếm bài viết phù hợp với từ khóa tìm kiếm
+        const [rows, fields] = await pool.execute('SELECT * FROM `post` WHERE title LIKE ?', [`%${searchTerm}%`]);
+
+        res.json(rows); // Trả về kết quả tìm kiếm
+    } catch (error) {
+        console.error('Lỗi truy vấn cơ sở dữ liệu:', error);
+        res.status(500).json({ message: 'Lỗi máy chủ nội bộ' });
+    }
+});
 
 
+router.get('/api/quotation', async (req, res) => {
+    try {
+        // Truy vấn cơ sở dữ liệu để lấy dữ liệu từ bảng quotation
+        const [rows, fields] = await pool.execute('SELECT title, content, date, price, status FROM `quotation`');
 
+        // Trả về dữ liệu lấy được từ cơ sở dữ liệu
+        res.json({ quotations: rows });
+    } catch (error) {
+        console.error('Error querying MySQL:', error);
+        res.status(500).json({ message: 'Internal Server Error' });
+    }
+});
+
+router.post('/api/save-result', async (req, res) => {
+    try {
+        const {
+            user_id,
+            loai_nha,
+            dich_vu_xay,
+            muc_dau_tu,
+            mat_tien,
+            chieu_rong,
+            chieu_dai,
+            so_tang,
+            ngach_hem,
+            lung,
+            tum,
+            san_thuong,
+            ban_cong,
+            mong,
+            tang_ham,
+            mai,
+            san_vuon,
+            don_gia,
+            dien_tich_mong,
+            chi_phi_mong,
+            dien_tich_ham,
+            chi_phi_ham,
+            dien_tich_mai,
+            chi_phi_mai,
+            dien_tich_toan_bo,
+            thanh_tien_tang,
+            dien_tich_lung,
+            thanh_tien_lung,
+            dien_tich_tum,
+            thanh_tien_tum,
+            dien_tich_ban_cong,
+            chi_phi_ban_cong,
+            dien_tich_san_vuon,
+            chi_phi_san_vuon,
+            tong_dien_tich,
+            tong_chi_phi,
+        } = req.body;
+
+        // Query để thêm kết quả vào bảng 'calculationresult'
+        const insertQuery = `
+        INSERT INTO calculationresult (
+          user_id,
+          loai_nha,
+          dich_vu_xay,
+          muc_dau_tu,
+          mat_tien,
+          chieu_rong,
+          chieu_dai,
+          so_tang,
+          ngach_hem,
+          lung,
+          tum,
+          san_thuong,
+          ban_cong,
+          mong,
+          tang_ham,
+          mai,
+          san_vuon,
+          don_gia,
+          dien_tich_mong,
+          chi_phi_mong,
+          dien_tich_ham,
+          chi_phi_ham,
+          dien_tich_mai,
+          chi_phi_mai,
+          dien_tich_toan_bo,
+          thanh_tien_tang,
+          dien_tich_lung,
+          thanh_tien_lung,
+          dien_tich_tum,
+          thanh_tien_tum,
+          dien_tich_ban_cong,
+          chi_phi_ban_cong,
+          dien_tich_san_vuon,
+          chi_phi_san_vuon,
+          tong_dien_tich,
+          tong_chi_phi
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+
+        const values = [
+            user_id,
+            loai_nha,
+            dich_vu_xay,
+            muc_dau_tu,
+            mat_tien,
+            chieu_rong,
+            chieu_dai,
+            so_tang,
+            ngach_hem,
+            lung,
+            tum,
+            san_thuong,
+            ban_cong,
+            mong,
+            tang_ham,
+            mai,
+            san_vuon,
+            don_gia,
+            dien_tich_mong,
+            chi_phi_mong,
+            dien_tich_ham,
+            chi_phi_ham,
+            dien_tich_mai,
+            chi_phi_mai,
+            dien_tich_toan_bo,
+            thanh_tien_tang,
+            dien_tich_lung,
+            thanh_tien_lung,
+            dien_tich_tum,
+            thanh_tien_tum,
+            dien_tich_ban_cong,
+            chi_phi_ban_cong,
+            dien_tich_san_vuon,
+            chi_phi_san_vuon,
+            tong_dien_tich,
+            tong_chi_phi,
+        ];
+
+        db.query(insertQuery, values, (err, result) => {
+            if (err) {
+                console.error('Error saving result to MySQL:', err);
+                res.status(500).json({ success: false, message: 'Internal Server Error' });
+            } else {
+                res.json({ success: true, message: 'Result saved successfully' });
+            }
+        });
+    } catch (error) {
+        console.error('Error saving result:', error);
+        res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
+});
+
+
+router.post('/saveResult', (req, res) => {
+    const data = req.body; // Make sure to use body-parser middleware or equivalent
+
+    // Assuming you have a users table with user_id and a results table with the specified columns
+    const query = 'INSERT INTO calculationresult SET ?';
+    db.query(query, data, (err, result) => {
+        if (err) {
+            console.error('Error saving result to database:', err);
+            res.status(500).send('Internal Server Error');
+        } else {
+            console.log('Result saved successfully');
+            res.status(200).send('Result saved successfully');
+        }
+    });
+});
 export default router;
